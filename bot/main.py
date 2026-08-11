@@ -304,6 +304,13 @@ async def do_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str) -> str:
 
 
 # ---------------------------------------------------------------- callbacks
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    if isinstance(err, BadRequest) and "not modified" in str(err).lower():
+        return  # user tapped the same button twice — nothing to update
+    log.exception("handler error", exc_info=err)
+
+
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
