@@ -25,6 +25,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -304,6 +305,13 @@ async def do_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str) -> str:
 
 
 # ---------------------------------------------------------------- callbacks
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    if isinstance(err, BadRequest) and "not modified" in str(err).lower():
+        return  # user tapped the same button twice — nothing to update
+    log.exception("handler error", exc_info=err)
+
+
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -527,7 +535,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     match = URL_RE.search(text)
-    if match and uid not in sessions:
+    if match:
         cleanup(uid)
         status = await update.message.reply_text("⬇️ লিংক থেকে ডাউনলোড হচ্ছে…")
         workdir = tempfile.mkdtemp(prefix="pdfbot_")
@@ -633,6 +641,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_error_handler(on_error)
     return app
 
 
