@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: pdf-snipper-bot
+    runtime: python
+    plan: free
+    region: singapore
+    rootDir: bot
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: BASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: MAX_PAGES_PER_JOB
+        value: "250"
+      - key: MAX_SOURCE_MB
+        value: "300"
+      - key: KEEPALIVE_MINUTES
+        value: "10"
+      - key: DB_PATH
+        value: /tmp/pdfbot.db
