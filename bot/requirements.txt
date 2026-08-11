@@ -1,0 +1,5 @@
+python-telegram-bot[webhooks]==21.6
+pypdf==5.1.0
+pikepdf==9.4.0
+Pillow==11.0.0
+aiohttp==3.10.10
