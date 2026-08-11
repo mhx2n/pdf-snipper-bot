@@ -13,6 +13,7 @@ import re
 import shutil
 import tempfile
 import time
+from urllib.parse import parse_qs, unquote, urlparse
 from typing import Any, Dict, Optional
 
 import aiohttp
@@ -60,6 +61,7 @@ sessions: Dict[int, Dict[str, Any]] = {}
 pending_admin: Dict[int, str] = {}  # owner_id -> awaited action
 
 URL_RE = re.compile(r"https?://\S+", re.I)
+DRIVE_FILE_RE = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 
 
 # ---------------------------------------------------------------- helpers
@@ -447,18 +449,68 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await prepare_source(update, path, name, workdir)
 
 
-async def download_url(url: str, dest: str, limit_bytes: int) -> None:
+class DownloadError(Exception):
+    """A download failure that can be safely shown to the user."""
+
+
+def direct_download_url(url: str) -> tuple[str, str]:
+    """Convert a public Google Drive share URL to its file download endpoint."""
+    cleaned = url.rstrip(".,;)>]}\"'")
+    parsed = urlparse(cleaned)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    if host not in {"drive.google.com", "docs.google.com", "drive.usercontent.google.com"}:
+        return cleaned, "source.pdf"
+
+    match = DRIVE_FILE_RE.search(parsed.path)
+    file_id = match.group(1) if match else parse_qs(parsed.query).get("id", [""])[0]
+    if not file_id:
+        raise DownloadError("এটি Google Drive-এর ফাইল লিংক নয়")
+    return (
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t",
+        f"drive_{file_id[:10]}.pdf",
+    )
+
+
+def response_filename(content_disposition: str, fallback: str) -> str:
+    encoded = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
+    plain = re.search(r'filename="?([^";]+)', content_disposition, re.I)
+    raw = unquote(encoded.group(1)) if encoded else (plain.group(1) if plain else "")
+    if raw:
+        try:
+            raw = raw.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    name = os.path.basename(raw).strip() or fallback
+    return name if name.lower().endswith(".pdf") else f"{name}.pdf"
+
+
+async def download_url(url: str, dest: str, limit_bytes: int) -> str:
+    download_url_value, fallback_name = direct_download_url(url)
     timeout = aiohttp.ClientTimeout(total=600)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url) as resp:
+    headers = {"User-Agent": "Mozilla/5.0 PDF-Snipper-Bot/1.0"}
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.get(download_url_value, allow_redirects=True) as resp:
             resp.raise_for_status()
+            content_length = resp.headers.get("Content-Length")
+            if content_length and int(content_length) > limit_bytes:
+                raise DownloadError("ফাইলটি নির্ধারিত সাইজের চেয়ে বড়")
             got = 0
+            signature = b""
             with open(dest, "wb") as fh:
                 async for chunk in resp.content.iter_chunked(1 << 16):
                     got += len(chunk)
                     if got > limit_bytes:
-                        raise ValueError("too big")
+                        raise DownloadError("ফাইলটি নির্ধারিত সাইজের চেয়ে বড়")
+                    if len(signature) < 5:
+                        signature += chunk[: 5 - len(signature)]
                     fh.write(chunk)
+            if not signature.startswith(b"%PDF-"):
+                raise DownloadError(
+                    "PDF পাওয়া যায়নি—Drive ফাইলটির General access ‘Anyone with the link’ করুন"
+                )
+            return response_filename(
+                resp.headers.get("Content-Disposition", ""), fallback_name
+            )
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -481,14 +533,22 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         workdir = tempfile.mkdtemp(prefix="pdfbot_")
         path = os.path.join(workdir, "source.pdf")
         try:
-            await download_url(match.group(0), path, MAX_SOURCE_MB * 1024 * 1024)
-        except Exception as exc:
+            filename = await download_url(
+                match.group(0), path, MAX_SOURCE_MB * 1024 * 1024
+            )
+        except DownloadError as exc:
             shutil.rmtree(workdir, ignore_errors=True)
-            reason = "ফাইল খুব বড়" if isinstance(exc, ValueError) else "লিংক থেকে ডাউনলোড করা গেল না"
-            await status.edit_text(f"❌ {reason}।")
+            await status.edit_text(f"❌ {exc}।")
+            return
+        except Exception as exc:
+            log.warning("URL download failed: %s", exc)
+            shutil.rmtree(workdir, ignore_errors=True)
+            await status.edit_text(
+                "❌ লিংক থেকে ডাউনলোড করা গেল না। লিংকটি পাবলিক কিনা যাচাই করুন।"
+            )
             return
         await status.delete()
-        await prepare_source(update, path, os.path.basename(match.group(0).split("?")[0]) or "source.pdf", workdir)
+        await prepare_source(update, path, filename, workdir)
         return
 
     session = sessions.get(uid)
