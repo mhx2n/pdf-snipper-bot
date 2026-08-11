@@ -527,7 +527,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     match = URL_RE.search(text)
-    if match and uid not in sessions:
+    if match:
         cleanup(uid)
         status = await update.message.reply_text("⬇️ লিংক থেকে ডাউনলোড হচ্ছে…")
         workdir = tempfile.mkdtemp(prefix="pdfbot_")
