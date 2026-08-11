@@ -25,6 +25,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
