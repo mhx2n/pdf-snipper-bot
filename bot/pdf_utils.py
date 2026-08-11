@@ -83,7 +83,7 @@ def extract_pages(src_path: str, pages: Iterable[int], out_path: str) -> str:
 def _recompress_images(pdf: pikepdf.Pdf, mode: QualityMode) -> None:
     if mode.jpeg_quality is None:
         return
-    seen: set[int] = set()
+    replaced: dict[tuple[int, int], Any] = {}
     for page in pdf.pages:
         resources = page.get("/Resources")
         xobjects = resources.get("/XObject") if resources is not None else None
@@ -93,10 +93,12 @@ def _recompress_images(pdf: pikepdf.Pdf, mode: QualityMode) -> None:
             obj = xobjects[name]
             if obj.get("/Subtype") != "/Image":
                 continue
-            key = id(obj.objgen) if obj.objgen == (0, 0) else hash(obj.objgen)
-            if key in seen:
+            key = tuple(obj.objgen)
+            # The same image object is often shared by many pages — recompress
+            # once, then point every page at the replacement.
+            if key in replaced and key != (0, 0):
+                xobjects[name] = replaced[key]
                 continue
-            seen.add(key)
             try:
                 pil = pikepdf.PdfImage(obj).as_pil_image()
             except Exception:
@@ -123,7 +125,10 @@ def _recompress_images(pdf: pikepdf.Pdf, mode: QualityMode) -> None:
                 "/DeviceGray" if pil.mode == "L" else "/DeviceRGB"
             )
             new_img.Filter = pikepdf.Name("/DCTDecode")
-            xobjects[name] = new_img
+            new_obj = pdf.make_indirect(new_img)
+            xobjects[name] = new_obj
+            if key != (0, 0):
+                replaced[key] = new_obj
 
 
 def compress(src_path: str, out_path: str, mode_key: str) -> str:
