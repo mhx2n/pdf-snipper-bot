@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import os
 from dataclasses import dataclass
-from typing import Iterable, List, Tuple
+from typing import Any, Iterable, List, Tuple
 
 import pikepdf
 from PIL import Image
